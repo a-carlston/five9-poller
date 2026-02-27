@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: five9-poller
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
+    envVars:
+      - key: FIVE9_USER
+        sync: false
+      - key: FIVE9_PASS
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
