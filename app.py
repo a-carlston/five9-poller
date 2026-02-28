@@ -12,7 +12,7 @@ import time
 from datetime import datetime, timezone, timedelta
 
 import requests
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 
 app = Flask(__name__)
 
@@ -21,6 +21,7 @@ FIVE9_USER = os.environ.get("FIVE9_USER", "")
 FIVE9_PASS = os.environ.get("FIVE9_PASS", "")
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")  # service role key for writes
+POLL_SECRET = os.environ.get("POLL_SECRET", "")  # auth token for /poll endpoint
 
 FIVE9_SOAP_URL = "https://api.five9.com/wssupervisor/v14/SupervisorWebService"
 FIVE9_NS = "http://service.supervisor.ws.five9.com/"
@@ -161,6 +162,10 @@ def health():
 @app.route("/poll")
 def poll():
     """Grab Five9 agent state snapshot and write to Supabase."""
+    token = request.args.get("token", "")
+    if POLL_SECRET and token != POLL_SECRET:
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
     start = time.time()
     snapshot_ts = datetime.now(timezone.utc).isoformat()
 
