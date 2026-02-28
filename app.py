@@ -9,7 +9,7 @@ triggered by an external cron (cron-job.org) or Render cron job.
 
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import requests
 from flask import Flask, jsonify
@@ -24,6 +24,9 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")  # service role key for writes
 
 FIVE9_SOAP_URL = "https://api.five9.com/wssupervisor/v14/SupervisorWebService"
 FIVE9_NS = "http://service.supervisor.ws.five9.com/"
+
+# Five9 domain timezone is Pacific (UTC-8 PST / UTC-7 PDT)
+FIVE9_TZ_OFFSET_HOURS = -8
 
 # ── Five9 SOAP helpers ───────────────────────────────────────
 
@@ -101,13 +104,25 @@ def write_to_supabase(agents, snapshot_ts):
         # Skip logged-out agents
         if a.get("State") == "Logged Out":
             continue
+        # Convert Five9 Pacific timestamp to UTC
+        state_since_raw = a.get("State Since", "")
+        state_since_utc = ""
+        if state_since_raw:
+            try:
+                naive = datetime.strptime(state_since_raw, "%Y-%m-%d %H:%M:%S")
+                utc_dt = naive - timedelta(hours=FIVE9_TZ_OFFSET_HOURS)
+                state_since_utc = utc_dt.strftime("%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                state_since_utc = state_since_raw
+
         rows.append({
             "snapshot_ts": snapshot_ts,
             "username": a.get("Username", ""),
             "full_name": a.get("Full Name", ""),
             "state": a.get("State", ""),
             "reason_code": a.get("Reason Code", ""),
-            "state_since": a.get("State Since", ""),
+            "state_since": state_since_raw,
+            "state_since_utc": state_since_utc,
             "state_duration": a.get("State Duration", ""),
             "campaign_name": a.get("Campaign Name", ""),
             "call_type": a.get("Call Type", ""),
@@ -163,11 +178,27 @@ def poll():
     if err:
         return jsonify({"ok": False, "error": err}), 500
 
+    # Purge snapshots older than 48 hours
+    purged = 0
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+    del_resp = requests.delete(
+        f"{SUPABASE_URL}/rest/v1/five9_agent_snapshots?snapshot_ts=lt.{cutoff}",
+        headers={
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Prefer": "return=representation",
+        },
+        timeout=30,
+    )
+    if del_resp.status_code == 200:
+        purged = len(del_resp.json())
+
     elapsed = round(time.time() - start, 2)
     return jsonify({
         "ok": True,
         "agents_total": len(agents),
         "agents_written": count,
+        "purged": purged,
         "snapshot_ts": snapshot_ts,
         "elapsed_sec": elapsed,
     })
