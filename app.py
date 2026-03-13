@@ -22,6 +22,7 @@ FIVE9_PASS = os.environ.get("FIVE9_PASS", "")
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")  # service role key for writes
 POLL_SECRET = os.environ.get("POLL_SECRET", "")  # auth token for /poll endpoint
+COMPANY_ID = os.environ.get("COMPANY_ID", "")  # tenant UUID
 
 FIVE9_SOAP_URL = "https://api.five9.com/wssupervisor/v14/SupervisorWebService"
 FIVE9_NS = "http://service.supervisor.ws.five9.com/"
@@ -107,16 +108,17 @@ def write_to_supabase(agents, snapshot_ts):
             continue
         # Convert Five9 Pacific timestamp to UTC
         state_since_raw = a.get("State Since", "")
-        state_since_utc = ""
+        state_since_utc = None
         if state_since_raw:
             try:
                 naive = datetime.strptime(state_since_raw, "%Y-%m-%d %H:%M:%S")
                 utc_dt = naive - timedelta(hours=FIVE9_TZ_OFFSET_HOURS)
-                state_since_utc = utc_dt.strftime("%Y-%m-%d %H:%M:%S")
+                state_since_utc = utc_dt.replace(tzinfo=timezone.utc).isoformat()
             except ValueError:
-                state_since_utc = state_since_raw
+                state_since_utc = None
 
         rows.append({
+            "company_id": COMPANY_ID,
             "snapshot_ts": snapshot_ts,
             "username": a.get("Username", ""),
             "full_name": a.get("Full Name", ""),
@@ -166,6 +168,9 @@ def poll():
     if POLL_SECRET and token != POLL_SECRET:
         return jsonify({"ok": False, "error": "unauthorized"}), 401
 
+    if not COMPANY_ID:
+        return jsonify({"ok": False, "error": "COMPANY_ID not configured"}), 500
+
     start = time.time()
     snapshot_ts = datetime.now(timezone.utc).isoformat()
 
@@ -187,7 +192,7 @@ def poll():
     purged = 0
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
     del_resp = requests.delete(
-        f"{SUPABASE_URL}/rest/v1/five9_agent_snapshots?snapshot_ts=lt.{cutoff}",
+        f"{SUPABASE_URL}/rest/v1/five9_agent_snapshots?company_id=eq.{COMPANY_ID}&snapshot_ts=lt.{cutoff}",
         headers={
             "apikey": SUPABASE_KEY,
             "Authorization": f"Bearer {SUPABASE_KEY}",
